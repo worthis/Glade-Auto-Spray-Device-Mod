@@ -54,7 +54,7 @@ spray motor runs.
 | Glade Automatic Spray device | 1 | Donor device |
 | Digispark board (ATtiny85) | 1 | Any common clone works |
 | Electrolytic capacitor | 1 | 470–1000 µF, ≥ 6.3 V (suggested) — buffers motor current spikes |
-| Hookup wire | ~5 | Thin and flexible, e.g. AWG 26–30 |
+| Hookup wire | ~6 | Thin and flexible, e.g. AWG 26–30 |
 | Soldering iron, side cutters, knife | — | For wiring and the low-power mod |
 
 ## Preparing the Digispark (low-power mod)
@@ -145,7 +145,7 @@ The firmware keeps the stock Glade controller and emulates its mode switch:
 - `P0` pulls the controller's **"9 Min"** input to GND (the chip's pin is
   disconnected from the mode switch).
 - `P1` pulls the controller's **"Off"** input to GND.
-- Every 8 minutes (`resetTime`) the "9 Min" line is briefly released and
+- Every 6 minutes (`resetTime`) the "9 Min" line is briefly released and
   re-asserted — this resets the stock 9-minute timer, so the device never
   sprays on its own.
 - Every 2.5 hours (`pauseTime`) the firmware switches "Off" → "9 Min", which
@@ -158,8 +158,8 @@ Timing is configured at the top of `firmware.ino`:
 | Constant | Default | Meaning |
 |----------|---------|---------|
 | `pauseTime` | `9000` s (2.5 h) | Interval between sprays |
-| `resetTime` | `480` s (8 min) | Stock timer reset period — keep it below 9 minutes |
-| `workTime` | `10` s | Pause after a spray before the timing cycle restarts |
+| `resetTime` | `360` s (6 min) | Stock timer reset period — keep it below 9 minutes |
+| `workTime` | `16` s | Pause after a spray before the timing cycle restarts |
 
 ### Flashing
 

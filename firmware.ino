@@ -2,89 +2,92 @@
 #include <avr/sleep.h>
 #include <avr/interrupt.h>
 
-#define adc_disable() (ADCSRA &= ~(1 << ADEN))  // disable ADC (before power-off)
-#define adc_enable() (ADCSRA |= (1 << ADEN))    // re-enable ADC
+/*
+  How it works
+  ------------
+  The stock Glade controller sprays immediately when the mode changes from
+  "Off" to any other mode (9/18/36 min). The whole mod exploits this:
+    P0 -> stock "9 Min" input (chip pin cut from the physical switch)
+    P1 -> stock "Off" input
+  Pins emulate open-drain: OUTPUT+LOW = assert (pull to GND), INPUT = release.
+  The physical switch stays at "9 Min" (this position powers the Digispark).
 
-// How it works:
-// We use the standard air spray device’s “9 Min” mode.
-// When this mode is selected, power is supplied to our Digispark board, pin P0 is connected to GND, and the standard air spray device’s delay is activated (9 min).
-// Every 8 minutes (resetTime), we open the connection between P0 and GND and close it again to reset the air spray device’s delay timer.
-// Every 2.5 hours (pauseTime), we run doSpray() for a duration of (workTime) to activate the air spray device’s mechanism.
-// After (workTime), we reset the timer, and the cycle repeats.
-// This logic allows the air spray device’s manual activation button to be used as usual.
-// P0 is connected to the air spray device’s controller “9 Min” mode pin (the chip’s pin is disconnected from the switch).
-// P1 is connected to the air spray device’s controller “Off” mode pin.
+  - Normally P0 is asserted ("9 Min"), so the stock 9-min timer runs.
+  - Every resetTime we briefly release P0 to reset the stock timer before it
+    reaches 9 min, so the device never sprays on its own.
+  - Every pauseTime we pulse "Off" (P1) then re-assert "9 Min" (P0): the
+    Off->9Min transition makes the device spray once.
+  - The manual boost button keeps working (handled by the stock controller).
+  - Between ticks the ATtiny85 sleeps; the watchdog wakes it every 8 s.
+*/
 
-const uint32_t pauseTime = 9000;  // Air freshener activation time (sec)
-const uint32_t workTime = 10;     // Delay time before the air freshener mechanism activates (sec)
-const uint32_t resetTime = 480;   // Air freshener timer reset time (sec)
+// ---- Pins (open-drain emulation) ----
+const uint8_t PIN_9MIN = 0;  // P0
+const uint8_t PIN_OFF = 1;   // P1
+
+// ---- Timing, seconds (multiples of the 8 s watchdog tick) ----
+const uint32_t pauseTime = 9000;  // spray interval: 2.5 h
+const uint32_t resetTime = 360;   // stock-timer reset period: 6 min (keep < 540 s with margin!)
+const uint32_t workTime = 16;     // hold after a spray before restarting the cycle
+const uint8_t WDT_TICK = 8;       // watchdog wake-up period, seconds
+
+// ---- Mode-switch settle times, ms (empirically tuned) ----
+const uint16_t SETTLE_MS = 250;
+const uint16_t OFF_MS = 750;
+
+static_assert(resetTime < 540UL, "resetTime must stay below the stock 9-min timer");
+static_assert(resetTime < pauseTime, "resetTime must be shorter than pauseTime");
 
 uint32_t mainTimer = 0;
-bool state = false;  // true - Spray mode has been activated
+uint32_t lastReset = 0;
+bool spraying = false;
 
-/*
-  Disconnect P1 from GND
-  Connect P0 to GND
-  Glade enters “9 Minutes” mode
-  Initial operating mode
-*/
+// open-drain helpers: never drive HIGH (stock inputs have pull-ups)
+inline void release(uint8_t pin) {
+  pinMode(pin, INPUT);
+  digitalWrite(pin, LOW);
+}
+inline void assertLow(uint8_t pin) {
+  pinMode(pin, OUTPUT);
+  digitalWrite(pin, LOW);
+}
+
 void enableDefaultTimer() {
-  pinMode(1, INPUT);
-  digitalWrite(1, LOW);
-  delay(250);
-  pinMode(0, OUTPUT);
-  digitalWrite(0, LOW);
-  state = false;
+  release(PIN_OFF);
+  delay(SETTLE_MS);
+  assertLow(PIN_9MIN);
+  spraying = false;
 }
 
-/*
-  Glade sprays when switching from “Off” mode to any other mode (in our case, “9 Minutes”)
-  Disconnect P0 from GND—turns “9 Minutes” mode off
-  Connect P1 to GND—turns on “Off” mode
-  Disconnect P1 from GND—turns off “Off” mode
-  Connect P0 to GND—turns on “9 Minutes” mode
-  A spray is released
-*/
 void doSpray() {
-  state = true;
-  pinMode(0, INPUT);
-  digitalWrite(0, LOW);
-  delay(250);
-  pinMode(1, OUTPUT);
-  digitalWrite(1, LOW);
-  delay(750);
-  pinMode(1, INPUT);
-  digitalWrite(1, LOW);
-  delay(250);
-  pinMode(0, OUTPUT);
-  digitalWrite(0, LOW);
+  spraying = true;
+  release(PIN_9MIN);  // leave "9 Min"
+  delay(SETTLE_MS);
+  assertLow(PIN_OFF);  // enter "Off"
+  delay(OFF_MS);
+  release(PIN_OFF);  // leave "Off"
+  delay(SETTLE_MS);
+  assertLow(PIN_9MIN);  // Off -> 9 Min: the device sprays
 }
 
-/*
-  Disconnect P0 from GND
-  Connect P0 to GND
-  Glade enters “9 Minutes” mode; the chip's standard timer delay is reset
-  Do not perform this step if spray mode is active
-*/
 void resetDefaultTimer() {
-  if (state) {
-    return;
-  }
-
-  pinMode(0, INPUT);
-  digitalWrite(0, LOW);
-  delay(250);
-  pinMode(0, OUTPUT);
-  digitalWrite(0, LOW);
+  release(PIN_9MIN);  // briefly leave "9 Min" to reset the stock timer
+  delay(SETTLE_MS);
+  assertLow(PIN_9MIN);
 }
 
 void setup() {
-  // Power Saving setup
-  for (byte i = 0; i < 6; i++) {
-    pinMode(i, INPUT);     // Set all ports as INPUT to save energy
-    digitalWrite(i, LOW);  //
+  // Set all ports as INPUT to save energy
+  for (uint8_t i = 0; i < 6; i++) {
+    pinMode(i, INPUT);
+    digitalWrite(i, LOW);
   }
-  adc_disable();                        // Disable Analog-to-Digital Converter
+
+
+  ADCSRA &= ~_BV(ADEN);                          // ADC off
+  ACSR |= _BV(ACD);                              // analog comparator off
+  PRR |= _BV(PRADC) | _BV(PRUSI) | _BV(PRTIM1);  // stop unused clocks (Timer0 kept for delay)
+
   wdt_reset();                          // Watchdog reset
   wdt_enable(WDTO_8S);                  // Watchdog enable Options: 15MS, 30MS, 60MS, 120MS, 250MS, 500MS, 1S, 2S, 4S, 8S
   WDTCR |= _BV(WDIE);                   // Interrupts watchdog enable
@@ -95,27 +98,31 @@ void setup() {
 }
 
 void loop() {
-  mainTimer += 8;  // Each step takes 8 seconds
+  mainTimer += WDT_TICK;  // WDT free-runs: one tick ~= 8 s regardless of body time
 
   if (mainTimer >= pauseTime) {
-    if (state) {
-      if (mainTimer > (pauseTime + workTime)) {
+    if (spraying) {
+      if (mainTimer >= (pauseTime + workTime)) {
         mainTimer = 0;
-        state = false;
+        lastReset = 0;
+        spraying = false;
       }
     } else {
       doSpray();
     }
   }
 
-  if (mainTimer >= resetTime) {
+  // reset the stock timer once per resetTime (not on every tick)
+  if (!spraying && (mainTimer - lastReset >= resetTime)) {
+    lastReset = mainTimer;
     resetDefaultTimer();
   }
 
   sleep_enable();
   sleep_cpu();
+  sleep_disable();
 }
 
 ISR(WDT_vect) {
-  WDTCR |= _BV(WDIE);
+  WDTCR |= _BV(WDIE);  // re-arm the watchdog interrupt
 }
