@@ -1,3 +1,4 @@
+**English** | [Русский](README.ru.md)
 # Glade Auto-Spray Device Mod
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -34,6 +35,12 @@ pause, randomized timing, and so on.
   low-power tweaks below keep consumption minimal.
 - **Cheap and simple** — one Digispark, one capacitor and a few wires.
 - **Fully offline** — no Wi-Fi, no cloud, no app required.
+
+The entire modification is based on a built-in behavior of the stock Glade
+controller's firmware: **the device sprays immediately whenever the mode is
+changed from "Off" to any other mode (9, 18 or 36 minutes)**. The ATtiny85 merely
+emulates this transition electronically — the stock controller, motor driver and
+mechanics remain untouched.
 
 The Digispark is installed inside the device, powered from its battery compartment,
 and connected to the original PCB with two signal lines (`P0` / `P1`). A bulk
@@ -109,35 +116,6 @@ Solder the wires to the numbered pads on the Glade device PCB:
     +------------------------+                  +--------------------+
 ```
 
-The same wiring as a Mermaid diagram (rendered natively by GitHub):
-
-```mermaid
-flowchart LR
-    subgraph GLADE["Glade device PCB"]
-        G1["Pad 1 — 'Off' mode input"]
-        G2["Pad 2 — GND"]
-        G3["Pad 3 — V+ (~3 V)"]
-        G5["Pad 5 — V−"]
-        G4["Pad 4 — '9 Min' mode input"]
-    end
-
-    subgraph DIGI["Digispark (ATtiny85)"]
-        D1["P1"]
-        DG["GND"]
-        D5["5V"]
-        D0["P0"]
-    end
-
-    C1(["C1 · electrolytic<br/>470–1000 µF, ≥ 6.3 V"])
-
-    G1 --- D1
-    G2 --- DG
-    G3 --- D5
-    G4 --- D0
-    G3 ---|"+"| C1
-    C1 ---|"−"| G5
-```
-
 **C1** is an electrolytic capacitor connected between pads **3** and **5**. It
 stabilizes the supply rail while the motor runs — without it, the voltage dip can
 reset the Digispark.
@@ -155,6 +133,12 @@ Actual wiring:
 The sketch is located in [`firmware.ino`](firmware.ino).
 
 ### How it works
+
+> [!NOTE]
+> **Key principle:** the stock Glade controller's firmware triggers a spray
+> immediately whenever the operating mode is changed from **"Off"** to any other
+> mode (**9, 18 or 36 minutes**). The entire logic of this modification is built
+> around this behavior.
 
 The firmware keeps the stock Glade controller and emulates its mode switch:
 
