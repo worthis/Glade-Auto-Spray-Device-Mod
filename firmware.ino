@@ -28,7 +28,6 @@ const uint8_t PIN_OFF = 1;   // P1
 // ---- Timing, seconds (multiples of the 8 s watchdog tick) ----
 const uint32_t pauseTime = 9000;  // spray interval: 2.5 h
 const uint32_t resetTime = 360;   // stock-timer reset period: 6 min (keep < 540 s with margin!)
-const uint32_t workTime = 16;     // hold after a spray before restarting the cycle
 const uint8_t WDT_TICK = 8;       // watchdog wake-up period, seconds
 
 // ---- Mode-switch settle times, ms (empirically tuned) ----
@@ -40,7 +39,6 @@ static_assert(resetTime < pauseTime, "resetTime must be shorter than pauseTime")
 
 uint32_t mainTimer = 0;
 uint32_t lastReset = 0;
-bool spraying = false;
 
 // open-drain helpers: never drive HIGH (stock inputs have pull-ups)
 inline void release(uint8_t pin) {
@@ -56,11 +54,9 @@ void enableDefaultTimer() {
   release(PIN_OFF);
   delay(SETTLE_MS);
   assertLow(PIN_9MIN);
-  spraying = false;
 }
 
 void doSpray() {
-  spraying = true;
   release(PIN_9MIN);  // leave "9 Min"
   delay(SETTLE_MS);
   assertLow(PIN_OFF);  // enter "Off"
@@ -83,10 +79,8 @@ void setup() {
     digitalWrite(i, LOW);
   }
 
-
-  ADCSRA &= ~_BV(ADEN);                          // ADC off
-  ACSR |= _BV(ACD);                              // analog comparator off
-  PRR |= _BV(PRADC) | _BV(PRUSI) | _BV(PRTIM1);  // stop unused clocks (Timer0 kept for delay)
+  ADCSRA &= ~_BV(ADEN);  // ADC off
+  ACSR |= _BV(ACD);      // analog comparator off
 
   wdt_reset();                          // Watchdog reset
   wdt_enable(WDTO_8S);                  // Watchdog enable Options: 15MS, 30MS, 60MS, 120MS, 250MS, 500MS, 1S, 2S, 4S, 8S
@@ -100,22 +94,16 @@ void setup() {
 void loop() {
   mainTimer += WDT_TICK;  // WDT free-runs: one tick ~= 8 s regardless of body time
 
-  if (mainTimer >= pauseTime) {
-    if (spraying) {
-      if (mainTimer >= (pauseTime + workTime)) {
-        mainTimer = 0;
-        lastReset = 0;
-        spraying = false;
-      }
-    } else {
-      doSpray();
-    }
-  }
-
   // reset the stock timer once per resetTime (not on every tick)
-  if (!spraying && (mainTimer - lastReset >= resetTime)) {
+  if (mainTimer - lastReset >= resetTime) {
     lastReset = mainTimer;
     resetDefaultTimer();
+  }
+
+  if (mainTimer >= pauseTime) {
+    mainTimer = 0;
+    lastReset = 0;
+    doSpray();
   }
 
   sleep_enable();

@@ -159,7 +159,6 @@ Timing is configured at the top of `firmware.ino`:
 |----------|---------|---------|
 | `pauseTime` | `9000` s (2.5 h) | Interval between sprays |
 | `resetTime` | `360` s (6 min) | Stock timer reset period — keep it below 9 minutes |
-| `workTime` | `16` s | Pause after a spray before the timing cycle restarts |
 
 ### Flashing
 
